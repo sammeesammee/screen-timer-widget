@@ -3,71 +3,19 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import ctypes
-from ctypes import wintypes
 import pystray
 from PIL import Image, ImageDraw
-import winreg
-
-# --- API Native Win32 e Costanti per Eventi Power ---
-WM_POWERBROADCAST = 0x0218
-PBT_POWERSETTINGCHANGE = 0x8013
-
-class GUID(ctypes.Structure):
-    _fields_ = [
-        ("Data1", wintypes.DWORD),
-        ("Data2", wintypes.WORD),
-        ("Data3", wintypes.WORD),
-        ("Data4", ctypes.c_ubyte * 8)
-    ]
-
-# GUID_POWEREVENT_ACTIVE: {8a08f810-0909-4b0e-b832-1b05273c1420}
-GUID_POWEREVENT_ACTIVE = GUID(
-    0x8a08f810, 0x0909, 0x4b0e,
-    (ctypes.c_ubyte * 8)(0xb8, 0x32, 0x1b, 0x05, 0x27, 0x3c, 0x14, 0x20)
-)
-
-class POWERSETTING_CHANGE_STRUCT(ctypes.Structure):
-    _fields_ = [
-        ("PowerSetting", GUID),
-        ("DataLength", wintypes.DWORD),
-        ("Data", wintypes.BYTE * 1)
-    ]
 
 def set_screen_timeout(minutes):
-    """Imposta il timeout dello schermo via powercfg (0 = Mai)."""
+    """Imposta il timeout dello schermo su Windows via powercfg (0 = Mai)."""
     subprocess.run(f"powercfg -change -monitor-timeout-ac {minutes}", shell=True)
-
-def get_current_screen_timeout_fast():
-    """Legge il timeout direttamente dal Registro di Windows in millisecondi (ultra-veloce e 0% CPU)."""
-    try:
-        # Legge il subkey delle impostazioni video attive del piano energetico corrente
-        key_path = r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes"
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            active_scheme, _ = winreg.QueryValueEx(key, "ActivePowerScheme")
-        
-        val_path = rf"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{active_scheme}\7516b95f-f776-4464-8c53-06167f40cc99\7516b95f-f776-4464-8c53-06167f40cc99"
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, val_path) as key:
-            ac_val, _ = winreg.QueryValueEx(key, "ACSettingIndex")
-            return int(ac_val // 60)  # Converte secondi in minuti
-    except Exception:
-        pass
-    
-    # Fallback sicuro via powercfg
-    try:
-        cmd = "powercfg -getacvaluesetting SCHEME_CURRENT SUB_VIDEO 7516b95f-f776-4464-8c53-06167f40cc99"
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-        for line in result.stdout.splitlines():
-            if "Power Setting Index" in line:
-                return int(line.split(":")[-1].strip(), 16)
-    except Exception:
-        pass
-    return None
 
 def turn_screen_off_immediately():
     """Spegne immediatamente lo schermo in modo asincrono."""
     ctypes.windll.user32.PostMessageW(0xFFFF, 0x0112, 0xF170, 2)
 
 def interpolate_color(hex1, hex2, factor):
+    """Calcola un colore intermedio per animazioni fluide."""
     c1 = tuple(int(hex1[i:i+2], 16) for i in (1, 3, 5))
     c2 = tuple(int(hex2[i:i+2], 16) for i in (1, 3, 5))
     c = tuple(int(c1[j] + factor * (c2[j] - c1[j])) for j in range(3))
@@ -96,9 +44,9 @@ class ModernScreenTimerApp:
         self.color_yellow = "#f59e0b"
         self.notification_fg = "#34d399"
 
-        # Legge lo stato iniziale di Windows
-        current_val = get_current_screen_timeout_fast()
-        self.is_active = False if current_val == 0 else True
+        # Stato iniziale: Attivo su 10 minuti all'avvio
+        self.is_active = True
+        set_screen_timeout(10)
 
         # Container principale
         self.main_container = tk.Frame(root, bg=self.bg_dark)
@@ -155,18 +103,10 @@ class ModernScreenTimerApp:
         
         self.dropdown = ttk.Combobox(
             time_frame, textvariable=self.time_var, values=self.time_options, 
-            state="readonly" if self.is_active else "disabled", style="Purple.TCombobox", font=("Segoe UI", 9, "bold")
+            state="readonly", style="Purple.TCombobox", font=("Segoe UI", 9, "bold")
         )
         self.dropdown.pack(fill=tk.X)
         self.dropdown.bind("<<ComboboxSelected>>", self.on_combo_change)
-
-        # Imposta il valore della tendina iniziale se corrispondente
-        if current_val and current_val > 0:
-            for opt in self.time_options:
-                opt_m = int(opt.split()[0]) * 60 if "ora" in opt else int(opt.split()[0])
-                if opt_m == current_val:
-                    self.time_var.set(opt)
-                    break
 
         # --- Pulsanti ON e OFF ---
         btn_top_frame = tk.Frame(self.main_container, bg=self.bg_dark)
@@ -200,50 +140,6 @@ class ModernScreenTimerApp:
         self.fade_timer = None
 
         self.setup_tray_icon()
-
-        # Registrazione Eventi Win32 per ascolto in tempo reale (0% CPU)
-        self.register_power_notifications()
-
-    def register_power_notifications(self):
-        """Registra l'app per ricevere messaggi nativi Win32 quando cambia il power setting."""
-        try:
-            hwnd = self.root.winfo_id()
-            self.h_notify = ctypes.windll.user32.RegisterPowerSettingNotification(
-                wintypes.HANDLE(hwnd),
-                ctypes.byref(GUID_POWEREVENT_ACTIVE),
-                0
-            )
-            # Polling leggero di sicurezza ogni 1.5s leggendo la chiave di registro locale (senza cmd)
-            self.start_fast_registry_check()
-        except Exception:
-            pass
-
-    def start_fast_registry_check(self):
-        """Lettura di registro ultra-veloce diretta per sincro immediata."""
-        def check():
-            self.sync_with_system()
-            self.root.after(1500, check)
-        self.root.after(1500, check)
-
-    def sync_with_system(self):
-        val = get_current_screen_timeout_fast()
-        if val is not None:
-            if val == 0 and self.is_active:
-                self.is_active = False
-                self.dropdown.config(state="disabled")
-                self.animate_switch(False)
-            elif val > 0 and not self.is_active:
-                self.is_active = True
-                self.dropdown.config(state="readonly")
-                self.animate_switch(True)
-
-            if val > 0:
-                for opt in self.time_options:
-                    opt_mins = int(opt.split()[0]) * 60 if "ora" in opt else int(opt.split()[0])
-                    if opt_mins == val:
-                        if self.time_var.get() != opt:
-                            self.time_var.set(opt)
-                        break
 
     def apply_initial_visuals(self):
         if self.is_active:
@@ -349,7 +245,6 @@ class ModernScreenTimerApp:
         self.root.withdraw()
 
     def show_window(self, icon=None, item=None):
-        self.sync_with_system()
         self.position_bottom_right()
         self.root.deiconify()
         self.root.attributes("-topmost", True)
