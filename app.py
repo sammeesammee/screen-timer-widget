@@ -4,6 +4,8 @@ from tkinter import ttk
 import threading
 import ctypes
 import sys
+import os
+import gc
 import pystray
 from PIL import Image, ImageDraw
 
@@ -11,29 +13,21 @@ from PIL import Image, ImageDraw
 MUTEX_NAME = "Global\\DisplayTimerUtility_SingleInstance_Mutex"
 kernel32 = ctypes.windll.kernel32
 mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-last_error = kernel32.GetLastError()
-
-# ERROR_ALREADY_EXISTS = 183
-if last_error == 183:
-    # Un'altra istanza dell'applicazione è già attiva, usciamo silenziosamente
+if kernel32.GetLastError() == 183:
     sys.exit(0)
 
-# Imposta il nome identificativo del processo per Windows / Task Manager
 try:
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DisplayTimerUtility.App")
 except Exception:
     pass
 
 def set_screen_timeout(minutes):
-    """Imposta il timeout dello schermo su Windows via powercfg (0 = Mai)."""
     subprocess.run(f"powercfg -change -monitor-timeout-ac {minutes}", shell=True)
 
 def turn_screen_off_immediately():
-    """Spegne immediatamente lo schermo in modo asincrono."""
     ctypes.windll.user32.PostMessageW(0xFFFF, 0x0112, 0xF170, 2)
 
 def interpolate_color(hex1, hex2, factor):
-    """Calcola un colore intermedio per animazioni fluide."""
     c1 = tuple(int(hex1[i:i+2], 16) for i in (1, 3, 5))
     c2 = tuple(int(hex2[i:i+2], 16) for i in (1, 3, 5))
     c = tuple(int(c1[j] + factor * (c2[j] - c1[j])) for j in range(3))
@@ -51,7 +45,6 @@ class ModernScreenTimerApp:
         self.height = 180
         self.position_bottom_right()
 
-        # --- Tavolozza Colori ---
         self.bg_dark = "#1e1b2e"
         self.card_bg = "#2a2640"
         self.text_light = "#ffffff"
@@ -62,15 +55,13 @@ class ModernScreenTimerApp:
         self.color_yellow = "#f59e0b"
         self.notification_fg = "#34d399"
 
-        # Stato iniziale: Attivo su 10 minuti all'avvio
         self.is_active = True
         set_screen_timeout(10)
 
-        # Container principale
         self.main_container = tk.Frame(root, bg=self.bg_dark)
         self.main_container.pack(fill=tk.BOTH, expand=True)
 
-        # --- Barra Titolo con X ---
+        # Barra Titolo con X
         title_bar = tk.Frame(self.main_container, bg=self.bg_dark)
         title_bar.pack(fill=tk.X, padx=10, pady=(5, 0))
 
@@ -89,7 +80,7 @@ class ModernScreenTimerApp:
         close_btn.bind("<Enter>", lambda e: close_btn.config(fg=self.color_red))
         close_btn.bind("<Leave>", lambda e: close_btn.config(fg=self.text_muted))
 
-        # --- Stile Combobox ---
+        # Stile Combobox
         style = ttk.Style()
         style.theme_use('default')
         style.configure("Purple.TCombobox", 
@@ -106,7 +97,7 @@ class ModernScreenTimerApp:
         root.option_add('*TCombobox*Listbox.selectForeground', self.text_light)
         root.option_add('*TCombobox*Listbox.font', ("Segoe UI", 9))
 
-        # --- Menu a Tendina ---
+        # Menu a Tendina
         time_frame = tk.Frame(self.main_container, bg=self.bg_dark)
         time_frame.pack(fill=tk.X, padx=12, pady=(6, 2))
 
@@ -126,7 +117,7 @@ class ModernScreenTimerApp:
         self.dropdown.pack(fill=tk.X)
         self.dropdown.bind("<<ComboboxSelected>>", self.on_combo_change)
 
-        # --- Pulsanti ON e OFF ---
+        # Pulsanti ON e OFF
         btn_top_frame = tk.Frame(self.main_container, bg=self.bg_dark)
         btn_top_frame.pack(fill=tk.X, padx=12, pady=(5, 2))
 
@@ -136,7 +127,7 @@ class ModernScreenTimerApp:
         self.btn_off = tk.Button(btn_top_frame, text="OFF", font=("Segoe UI", 8, "bold"), cursor="hand2", relief=tk.FLAT, command=self.turn_off)
         self.btn_off.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(2, 0), ipady=2)
 
-        # --- Pulsante "Spegni ora" ---
+        # Pulsante "Spegni ora"
         btn_bottom_frame = tk.Frame(self.main_container, bg=self.bg_dark)
         btn_bottom_frame.pack(fill=tk.X, padx=12, pady=(2, 2))
 
@@ -151,13 +142,16 @@ class ModernScreenTimerApp:
 
         self.apply_initial_visuals()
 
-        # --- Toast Notification ---
+        # Toast Notification
         self.toast_label = tk.Label(self.main_container, text="", font=("Segoe UI", 8, "bold"), bg=self.bg_dark, fg=self.notification_fg)
         self.toast_label.pack(fill=tk.X, padx=10, pady=(0, 2))
         self.toast_timer = None
         self.fade_timer = None
 
         self.setup_tray_icon()
+        
+        # Pulisce la memoria non necessaria all'avvio
+        gc.collect()
 
     def apply_initial_visuals(self):
         if self.is_active:
@@ -268,8 +262,13 @@ class ModernScreenTimerApp:
         self.root.attributes("-topmost", True)
 
     def quit_app(self, icon, item):
-        icon.stop()
-        self.root.quit()
+        """Ferma la tray icon e uccide completamente il processo e i thread associati."""
+        try:
+            icon.stop()
+        except Exception:
+            pass
+        # Uscita forzata pulita che ammazza ogni sotto-processo/thread residuo
+        os._exit(0)
 
     def setup_tray_icon(self):
         image = Image.new('RGB', (64, 64), color=(30, 27, 46))
