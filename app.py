@@ -3,8 +3,26 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import ctypes
+import sys
 import pystray
 from PIL import Image, ImageDraw
+
+# --- Controllo Istanza Singola con Mutex Windows ---
+MUTEX_NAME = "Global\\DisplayTimerUtility_SingleInstance_Mutex"
+kernel32 = ctypes.windll.kernel32
+mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+last_error = kernel32.GetLastError()
+
+# ERROR_ALREADY_EXISTS = 183
+if last_error == 183:
+    # Un'altra istanza dell'applicazione è già attiva, usciamo silenziosamente
+    sys.exit(0)
+
+# Imposta il nome identificativo del processo per Windows / Task Manager
+try:
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DisplayTimerUtility.App")
+except Exception:
+    pass
 
 def set_screen_timeout(minutes):
     """Imposta il timeout dello schermo su Windows via powercfg (0 = Mai)."""
@@ -262,7 +280,7 @@ class ModernScreenTimerApp:
             pystray.MenuItem('Apri Timer', self.show_window, default=True),
             pystray.MenuItem('Esci', self.quit_app)
         )
-        self.tray_icon = pystray.Icon("screen_timer", image, "Timer Schermo", menu)
+        self.tray_icon = pystray.Icon("screen_timer", image, "Display Timer Utility", menu)
         
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 

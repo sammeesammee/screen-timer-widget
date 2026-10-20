@@ -1,4 +1,5 @@
-('C:\\Users\\samue\\Documents\\VSCode\\projects\\python_screen_timeout\\build\\app\\PYZ-00.pyz',
+('C:\\Users\\samue\\Documents\\VSCode\\projects\\python_screen_timeout\\build\\Display '
+ 'Timer Utility\\PYZ-00.pyz',
  [('PIL',
    'C:\\Users\\samue\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PIL\\__init__.py',
    'PYMODULE'),
